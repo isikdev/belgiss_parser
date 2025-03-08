@@ -1,0 +1,43 @@
+2025-03-08 04:57:29,228 - INFO - Логирование инициализировано
+2025-03-08 04:57:29 - INFO - Логирование инициализировано
+2025-03-08 04:57:29,228 - INFO - Инициализация парсера успешно завершена
+2025-03-08 04:57:29 - INFO - Инициализация парсера успешно завершена
+2025-03-08 04:57:39,424 - INFO - Всего найдено 228 записей на 3 страницах
+2025-03-08 04:57:39 - INFO - Всего найдено 228 записей на 3 страницах
+2025-03-08 04:57:41,777 - INFO - Получено 100 сертификатов со страницы 2
+2025-03-08 04:57:41 - INFO - Получено 100 сертификатов со страницы 2
+2025-03-08 04:57:42,041 - INFO - Получено 28 сертификатов со страницы 3
+2025-03-08 04:57:42 - INFO - Получено 28 сертификатов со страницы 3
+2025-03-08 04:57:42,081 - INFO - Получено 228 ID сертификатов/деклараций
+2025-03-08 04:57:42 - INFO - Получено 228 ID сертификатов/деклараций
+2025-03-08 04:57:43,984 - INFO - Увеличено число потоков до 5
+2025-03-08 04:57:43 - INFO - Увеличено число потоков до 5
+2025-03-08 04:57:44,608 - INFO - Увеличено число потоков до 6
+2025-03-08 04:57:44 - INFO - Увеличено число потоков до 6
+2025-03-08 04:57:45,264 - INFO - Увеличено число потоков до 7
+2025-03-08 04:57:45 - INFO - Увеличено число потоков до 7
+2025-03-08 04:57:45,280 - INFO - Увеличено число потоков до 8
+2025-03-08 04:57:45 - INFO - Увеличено число потоков до 8
+2025-03-08 04:57:45,424 - INFO - Увеличено число потоков до 9
+2025-03-08 04:57:45 - INFO - Увеличено число потоков до 9
+2025-03-08 04:57:45,624 - INFO - Увеличено число потоков до 10
+2025-03-08 04:57:45 - INFO - Увеличено число потоков до 10
+2025-03-08 04:57:45,632 - INFO - Увеличено число потоков до 11
+2025-03-08 04:57:45 - INFO - Увеличено число потоков до 11
+2025-03-08 04:57:45,632 - INFO - Увеличено число потоков до 12
+2025-03-08 04:57:45 - INFO - Увеличено число потоков до 12
+2025-03-08 04:57:46,111 - INFO - Увеличено число потоков до 13
+2025-03-08 04:57:46 - INFO - Увеличено число потоков до 13
+2025-03-08 04:57:46,126 - INFO - Увеличено число потоков до 14
+2025-03-08 04:57:46 - INFO - Увеличено число потоков до 14
+2025-03-08 04:57:47,117 - INFO - Увеличено число потоков до 15
+2025-03-08 04:57:47 - INFO - Увеличено число потоков до 15
+2025-03-08 04:58:08 - WARNING - Retrying (Retry(total=9, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ProtocolError('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))': /tsouz/tsouz-certifs/3312569
+2025-03-08 05:00:51 - WARNING - Retrying (Retry(total=9, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000001F8438F7700>, 'Connection to api.belgiss.by timed out. (connect timeout=30)')': /tsouz/tsouz-certifs/3312404
+2025-03-08 05:01:13 - WARNING - Retrying (Retry(total=8, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000001F84393AA70>, 'Connection to api.belgiss.by timed out. (connect timeout=30)')': /tsouz/tsouz-certifs/3312404
+2025-03-08 05:01:35 - WARNING - Retrying (Retry(total=7, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000001F8438AB670>, 'Connection to api.belgiss.by timed out. (connect timeout=30)')': /tsouz/tsouz-certifs/3312404
+2025-03-08 05:01:59 - WARNING - Retrying (Retry(total=6, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000001F8438AAE30>, 'Connection to api.belgiss.by timed out. (connect timeout=30)')': /tsouz/tsouz-certifs/3312404
+2025-03-08 05:02:25 - WARNING - Retrying (Retry(total=5, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000001F8438ABB20>, 'Connection to api.belgiss.by timed out. (connect timeout=30)')': /tsouz/tsouz-certifs/3312404
+2025-03-08 05:02:55 - WARNING - Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000001F8438AB1C0>, 'Connection to api.belgiss.by timed out. (connect timeout=30)')': /tsouz/tsouz-certifs/3312404
+2025-03-08 05:03:35 - WARNING - Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000001F8438ABA00>, 'Connection to api.belgiss.by timed out. (connect timeout=30)')': /tsouz/tsouz-certifs/3312404
+2025-03-08 05:04:35 - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000001F8438AB2B0>, 'Connection to api.belgiss.by timed out. (connect timeout=30)')': /tsouz/tsouz-certifs/3312404
