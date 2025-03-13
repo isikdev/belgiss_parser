@@ -177,17 +177,38 @@ class BelgissParser:
             "filter[DocStartDate][lte]": end_date_str,
             "query[trts]": 1
         }
+        
+        logger.info(f"Запрос сертификатов для дат {start_date_str} - {end_date_str}, страница {page}")
+        
         response = self.make_request("GET", url, params=params)
         if response and isinstance(response, dict):
             items = response.get('items', [])
             meta = response.get('_meta', {})
+            
+            # Проверим наличие ключей и выведем более подробную информацию
+            if not items:
+                logger.warning(f"Получен пустой список сертификатов для дат {start_date_str} - {end_date_str}, страница {page}")
+                logger.debug(f"Ответ API: {response}")
+            else:
+                logger.info(f"Получено {len(items)} сертификатов для дат {start_date_str} - {end_date_str}, страница {page}")
+                
+                # Логируем первые несколько ID для отладки
+                if len(items) > 0:
+                    sample_ids = [item.get('certdecltr_id', 'Н/Д') for item in items[:min(5, len(items))]]
+                    logger.info(f"Примеры ID: {', '.join(map(str, sample_ids))}")
+            
             result = {
                 'items': items,
                 'pages': meta.get('pageCount', 0),
                 'count': meta.get('totalCount', 0),
                 'current_page': meta.get('currentPage', page)
             }
+            
+            logger.info(f"Всего страниц: {result['pages']}, всего записей: {result['count']}")
+            
             return result
+        
+        logger.error(f"Не удалось получить данные по сертификатам для дат {start_date_str} - {end_date_str}, страница {page}")
         return None
 
     def get_certification_details(self, doc_id):
@@ -196,6 +217,35 @@ class BelgissParser:
             return None
         url = f"{self.api_url}/tsouz-certifs/{doc_id}"
         response = self.make_request("GET", url)
+        
+        # Добавляем отладочное логирование
+        if response:
+            cert_details = response.get('certdecltr_ConformityDocDetails', {})
+            applicant = cert_details.get('ApplicantDetails', {})
+            manufacturer_list = cert_details.get('ManufacturerDetails', [])
+            
+            logger.info(f"ID: {doc_id} - Получены данные сертификата")
+            
+            # Проверяем наличие данных заявителя
+            if applicant:
+                logger.info(f"ID: {doc_id} - Данные заявителя: Адрес={bool(applicant.get('Address'))}, Контакты={bool(applicant.get('ContactInfo'))}")
+            else:
+                logger.warning(f"ID: {doc_id} - Данные заявителя отсутствуют")
+            
+            # Проверяем наличие данных изготовителя
+            if manufacturer_list and len(manufacturer_list) > 0:
+                manufacturer = manufacturer_list[0]
+                logger.info(f"ID: {doc_id} - Данные изготовителя: Адрес={bool(manufacturer.get('Address'))}, Контакты={bool(manufacturer.get('ContactInfo'))}")
+            else:
+                logger.warning(f"ID: {doc_id} - Данные изготовителя отсутствуют")
+            
+            # Проверяем наличие данных о продукте
+            product_details = cert_details.get('ProductDetails', [])
+            if product_details and len(product_details) > 0:
+                logger.info(f"ID: {doc_id} - Данные о продукте: Имя={bool(product_details[0].get('ProductName'))}, Коды ТН ВЭД={bool(product_details[0].get('CommodityCodeList'))}")
+            else:
+                logger.warning(f"ID: {doc_id} - Данные о продукте отсутствуют")
+        
         return response
 
     def fetch_page_worker(self, page, start_date, end_date, per_page, result_dict, pbar):
@@ -215,80 +265,179 @@ class BelgissParser:
         time.sleep(max(0.01, self.adaptive_delay / 4))
 
     def fetch_cert_details_worker(self, cert_id, result_list, pbar):
-        cert_details = self.get_certification_details(cert_id)
-        if cert_details:
+        """
+        Рабочий метод для получения и обработки деталей сертификата
+        """
+        # Увеличиваем число попыток для важных запросов
+        max_retries = self.current_retries + 1
+        retry_count = 0
+        
+        while retry_count < max_retries:
             try:
-                processed_data = self.process_cert_data(cert_details)
-                if processed_data:
-                    with self.lock:
-                        if processed_data not in result_list:
-                            result_list.append(processed_data)
-                        pbar.set_description(f"[2/2] Детали | Потоки: {self.current_threads} | ID: {cert_id}")
-                        pbar.update(1)
+                cert_details = self.get_certification_details(cert_id)
+                if cert_details:
+                    processed_data = self.process_cert_data(cert_details)
+                    
+                    if processed_data:
+                        with self.lock:
+                            # Проверяем, не был ли этот сертификат уже добавлен
+                            exists = False
+                            for existing in result_list:
+                                if existing.get('Регистрационный номер') == processed_data.get('Регистрационный номер'):
+                                    exists = True
+                                    break
+                                    
+                            if not exists:
+                                result_list.append(processed_data)
+                                pbar.set_description(f"[2/2] Детали | Потоки: {self.current_threads} | ID: {cert_id}")
+                            else:
+                                logger.info(f"Сертификат {cert_id} уже добавлен, пропускаем дубликат")
+                                
+                            pbar.update(1)
+                            # Успешное получение, возвращаемся из функции
+                            return
+                    else:
+                        with self.lock:
+                            logger.warning(f"Не удалось обработать данные для сертификата {cert_id}")
+                            pbar.set_description(f"[2/2] Ошибка обработки | ID: {cert_id}")
+                            pbar.update(1)
+                            
+                        # Увеличиваем счетчик попыток и продолжаем цикл
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            logger.info(f"Повторная попытка {retry_count}/{max_retries} для сертификата {cert_id}")
+                            time.sleep(0.5)  # Небольшая пауза перед повторной попыткой
+                        else:
+                            # Исчерпаны все попытки
+                            logger.error(f"Исчерпаны все попытки для сертификата {cert_id}")
+                            return
                 else:
                     with self.lock:
-                        logger.warning(f"Не удалось обработать данные для сертификата {cert_id}")
-                        pbar.set_description(f"[2/2] Ошибка обработки | ID: {cert_id}")
+                        logger.warning(f"Не удалось получить детали для сертификата {cert_id}")
+                        pbar.set_description(f"[2/2] Нет данных | ID: {cert_id}")
                         pbar.update(1)
+                        
+                    # Увеличиваем счетчик попыток и продолжаем цикл
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.info(f"Повторная попытка {retry_count}/{max_retries} для сертификата {cert_id}")
+                        time.sleep(0.5)  # Небольшая пауза перед повторной попыткой
+                    else:
+                        # Исчерпаны все попытки
+                        logger.error(f"Исчерпаны все попытки для сертификата {cert_id}")
+                        return
+                        
             except Exception as e:
                 with self.lock:
                     logger.error(f"Ошибка при обработке сертификата {cert_id}: {e}")
                     pbar.set_description(f"[2/2] Ошибка | ID: {cert_id}")
                     pbar.update(1)
-        else:
-            with self.lock:
-                logger.warning(f"Не удалось получить детали для сертификата {cert_id}")
-                pbar.set_description(f"[2/2] Нет данных | ID: {cert_id}")
-                pbar.update(1)
+                return
+                
+        # Небольшая пауза между запросами для снижения нагрузки на API
         time.sleep(max(0.01, self.adaptive_delay / 4))
 
     def parse_data_for_date_range(self, start_date, end_date, per_page=100):
         start_date_str = self.format_date(start_date)
         end_date_str = self.format_date(end_date)
+        
+        # Шаг 1: Получаем первую страницу для определения общего количества 
+        logger.info(f"Начинаем сбор данных за период {start_date_str} - {end_date_str}")
         data = self.get_certifications_by_date_range(start_date, end_date, page=1, per_page=per_page)
-        if not data or not data.get('items'):
+        
+        if not data:
             logger.error(f"Не удалось получить данные за период {start_date_str} - {end_date_str}")
             return []
-        total_count = data.get('count', 0)
-        total_pages = data.get('pages', 0)
-        if total_count == 0 or total_pages == 0:
+            
+        if not data.get('items'):
             logger.warning(f"За период {start_date_str} - {end_date_str} нет данных")
             return []
+            
+        total_count = data.get('count', 0)
+        total_pages = data.get('pages', 0)
+        
+        if total_count == 0 or total_pages == 0:
+            logger.warning(f"За период {start_date_str} - {end_date_str} нет данных (count={total_count}, pages={total_pages})")
+            return []
+            
         logger.info(f"Всего найдено {total_count} записей на {total_pages} страницах")
+        
+        # Шаг 2: Собираем ID всех сертификатов с каждой страницы
         all_cert_ids = {}
         all_cert_ids[1] = [item.get('certdecltr_id') for item in data.get('items', [])]
+        
+        # Задаем количество потоков для загрузки списка
         self.current_threads = min(8, max(4, self.max_threads // 5))
+        
+        # Собираем ID с остальных страниц, если их больше одной
         if total_pages > 1:
             result_dict = {}
             with tqdm(total=total_pages - 1, desc=f"[1/2] Сбор списка | Потоки: {self.current_threads}",
                       bar_format='{desc} | {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
                       position=0, leave=True, colour='green') as pbar:
+                
+                # Разбиваем страницы на батчи для последовательной обработки
                 pages = list(range(2, total_pages + 1))
                 batch_size = self.current_threads
                 page_batches = [pages[i:i+batch_size] for i in range(0, len(pages), batch_size)]
+                
+                # Обрабатываем каждый батч страниц параллельно
                 for batch in page_batches:
                     with ThreadPoolExecutor(max_workers=self.current_threads) as executor:
-                        futures = [executor.submit(self.fetch_page_worker, page, start_date, end_date, per_page, result_dict, pbar) for page in batch]
+                        futures = [executor.submit(
+                            self.fetch_page_worker, 
+                            page, 
+                            start_date, 
+                            end_date, 
+                            per_page, 
+                            result_dict, 
+                            pbar
+                        ) for page in batch]
+                        
+                        # Ждем завершения всех футуров
                         for future in as_completed(futures):
-                            future.result()
+                            try:
+                                future.result()
+                            except Exception as e:
+                                logger.error(f"Ошибка при сборе списка: {e}")
+                    
+                    # Небольшая пауза между батчами, чтобы не перегружать API
                     if batch != page_batches[-1]:
-                        time.sleep(0.2)
+                        time.sleep(0.3)
+            
+            # Добавляем полученные ID к общему списку
             for page, ids in result_dict.items():
-                all_cert_ids[page] = ids
+                if ids:  # Проверяем, что список не пустой
+                    all_cert_ids[page] = ids
+                    
+        # Объединяем все ID в один список
         cert_ids = []
         for page in sorted(all_cert_ids.keys()):
-            cert_ids.extend(all_cert_ids[page])
+            if all_cert_ids[page]:  # Проверяем, что список не пустой
+                cert_ids.extend(all_cert_ids[page])
+        
+        # Удаляем дубликаты и None значения
+        cert_ids = [cert_id for cert_id in cert_ids if cert_id is not None]
+        cert_ids = list(dict.fromkeys(cert_ids))  # Удаляем дубликаты, сохраняя порядок
+        
         total_certs = len(cert_ids)
-        logger.info(f"Получено {total_certs} ID сертификатов/деклараций")
+        logger.info(f"Получено {total_certs} уникальных ID сертификатов/деклараций")
+        
         if total_certs == 0:
             logger.warning("Нет данных для обработки")
             return []
+            
+        # Шаг 3: Получаем детальную информацию о каждом сертификате
         result_list = []
         with tqdm(total=total_certs, desc=f"[2/2] Детали | Потоки: {self.current_threads}", 
-                bar_format='{desc} | {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
-                position=0, leave=True, colour='blue') as pbar:
+                  bar_format='{desc} | {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+                  position=0, leave=True, colour='blue') as pbar:
+            
+            # Разбиваем ID на батчи для последовательной обработки
             batch_size = self.current_threads * 2
             id_batches = [cert_ids[i:i+batch_size] for i in range(0, len(cert_ids), batch_size)]
+            
+            # Обрабатываем каждый батч ID параллельно
             for batch in id_batches:
                 with ThreadPoolExecutor(max_workers=self.current_threads) as executor:
                     futures = []
@@ -300,16 +449,27 @@ class BelgissParser:
                             pbar
                         )
                         futures.append(future)
+                        
+                    # Ждем завершения всех футуров
                     for future in as_completed(futures):
                         try:
                             future.result()
                         except Exception as e:
                             logger.error(f"Ошибка при получении деталей: {e}")
+                
+                # Небольшая пауза между батчами
                 if batch != id_batches[-1]:
-                    pbar.set_description(f"[2/2] Пауза 300мс | След. ID: {id_batches[id_batches.index(batch)+1][:3]}")
-                    time.sleep(0.3)
+                    delay = 0.3
+                    pbar.set_description(f"[2/2] Пауза {delay*1000:.0f}мс | Обработано: {pbar.n}/{total_certs}")
+                    time.sleep(delay)
 
-        logger.info(f"Получено {len(result_list)} записей с детальной информацией")
+        # Проверяем полноту собранных данных
+        if len(result_list) < total_certs:
+            missing = total_certs - len(result_list)
+            logger.warning(f"Внимание: получено {len(result_list)} записей из {total_certs} (не получено {missing})")
+        else:
+            logger.info(f"Успешно получены все {len(result_list)} записей с детальной информацией")
+            
         return result_list
 
     def process_cert_data(self, cert_data):
@@ -318,11 +478,19 @@ class BelgissParser:
             logger.error("Получены некорректные данные для обработки")
             result['Регистрационный номер'] = "Ошибка получения данных"
             return result
+        
+        # Логируем структуру данных для отладки
+        doc_id = cert_data.get('DocId', '') or cert_data.get('certdecltr_ConformityDocDetails', {}).get('DocId', '')
+        logger.info(f"Обработка данных для сертификата {doc_id}")
+        
         cert_details = cert_data.get('certdecltr_ConformityDocDetails', {})
-        doc_id = cert_data.get('DocId', '') or cert_details.get('DocId', '')
+        
+        # Сведения о документе
         result['Регистрационный номер'] = doc_id
         result['Дата начала действия'] = cert_details.get('DocStartDate', '')
         result['Дата окончания действия'] = cert_details.get('DocValidityDate', '')
+        
+        # Статус действия сертификата
         doc_status = cert_details.get('DocStatusDetails', {})
         status_code = doc_status.get('DocStatusCode', '')
         status_mapping = {
@@ -333,7 +501,9 @@ class BelgissParser:
             '05': 'Архивный',
         }
         result['Статус действия сертификата (декларации)'] = status_mapping.get(status_code, f'Неизвестный ({status_code})')
-        doc_kind_code = cert_data.get('ConformityDocKindCode', '')
+        
+        # Вид документа об оценке соответствия
+        doc_kind_code = cert_data.get('ConformityDocKindCode', '') or cert_details.get('ConformityDocKindCode', '')
         kind_mapping = {
             '01': 'Сертификат соответствия на продукцию',
             '02': 'Сертификат соответствия на услуги',
@@ -341,31 +511,249 @@ class BelgissParser:
             '05': 'Декларация о соответствии',
             '10': 'Сертификат соответствия ТР ТС/ЕАЭС',
             '15': 'Декларация о соответствии ТР ТС/ЕАЭС',
+            '20': 'Сертификат соответствия ТР ТС/ЕАЭС',
         }
         result['Вид документа об оценке соответствия'] = kind_mapping.get(doc_kind_code, f'Неизвестный ({doc_kind_code})')
+        
+        # Номер технического регламента
         tech_regs = cert_details.get('TechnicalRegulationId', [])
+        tech_regs = [tr for tr in tech_regs if tr] # Убираем None значения
         result['Номер технического регламента'] = ', '.join(tech_regs) if tech_regs else ''
+        
+        # Орган по сертификации
         conformity_authority = cert_details.get('ConformityAuthorityV2Details', {})
         result['Полное наименование органа по сертификации (из аттестата аккредитации)'] = conformity_authority.get('BusinessEntityName', '')
+        
+        # Данные заявителя
         applicant = cert_details.get('ApplicantDetails', {})
         result['Заявитель'] = applicant.get('BusinessEntityName', '')
         result['Страна (Заявитель)'] = applicant.get('UnifiedCountryCode', '')
-        result['Краткое наименование хозяйствующего субъекта (Заявитель)'] = applicant.get('BusinessEntityName', '')
+        result['Краткое наименование хозяйствующего субъекта (Заявитель)'] = applicant.get('BusinessEntityBriefName', '') or applicant.get('BusinessEntityName', '')
         result['Идентификатор хозяйствующего субъекта (Заявитель)'] = applicant.get('BusinessEntityId', '')
-        result['Адрес заявителя'] = applicant.get('Address', '')
-        result['Контактный реквизит заявителя'] = applicant.get('ContactInfo', '')
-        manufacturer = cert_details.get('ManufacturerDetails', [{}])[0] if cert_details.get('ManufacturerDetails') else {}
-        result['Изготовитель'] = manufacturer.get('BusinessEntityName', '')
-        result['Страна (Изготовитель)'] = manufacturer.get('UnifiedCountryCode', '')
-        result['Краткое наименование хозяйствующего субъекта (Изготовитель)'] = manufacturer.get('BusinessEntityName', '')
-        result['Адрес изготовителя'] = manufacturer.get('Address', '')
-        result['Контактный реквизит изготовителя'] = manufacturer.get('ContactInfo', '')
-        result['Объект технического регулирования'] = cert_details.get('TechnicalRegulationObject', '')
-        product_details = cert_details.get('ProductDetails', [])
-        if product_details:
+        
+        # Извлечение адреса заявителя из вложенной структуры
+        subject_address = None
+        if 'SubjectAddressDetails' in applicant and applicant['SubjectAddressDetails']:
+            if isinstance(applicant['SubjectAddressDetails'], list):
+                subject_address = applicant['SubjectAddressDetails'][0]
+            else:
+                subject_address = applicant['SubjectAddressDetails']
+        
+        if subject_address:
+            address_parts = []
+            country = subject_address.get('UnifiedCountryCode', '')
+            if country:
+                address_parts.append(f"Страна: {country}")
+            
+            postal = subject_address.get('PostCode', '') or subject_address.get('PostalCode', '')
+            if postal:
+                address_parts.append(f"Индекс: {postal}")
+                
+            region = subject_address.get('RegionName', '')
+            if region:
+                address_parts.append(f"Регион: {region}")
+                
+            city = subject_address.get('CityName', '')
+            if city:
+                address_parts.append(f"Город: {city}")
+                
+            street = subject_address.get('StreetName', '')
+            if street:
+                address_parts.append(f"Улица: {street}")
+                
+            house = subject_address.get('HouseNumber', '') or subject_address.get('BuildingNumberId', '')
+            if house:
+                address_parts.append(f"Дом: {house}")
+                
+            building = subject_address.get('BuildingNumber', '')
+            if building:
+                address_parts.append(f"Строение: {building}")
+                
+            room = subject_address.get('RoomNumber', '') or subject_address.get('RoomNumberId', '')
+            if room:
+                address_parts.append(f"Помещение: {room}")
+                
+            result['Адрес заявителя'] = ', '.join(address_parts)
+        else:
+            result['Адрес заявителя'] = ''
+        
+        # Извлечение контактных данных заявителя
+        if 'CommunicationDetails' in applicant and applicant['CommunicationDetails']:
+            contact_parts = []
+            for comm in applicant['CommunicationDetails']:
+                channel_code = comm.get('CommunicationChannelCode', '')
+                channel_ids = comm.get('CommunicationChannelId', [])
+                
+                if channel_ids and channel_code:
+                    if channel_code == 'TE':
+                        prefix = "Тел.: "
+                    elif channel_code == 'FX':
+                        prefix = "Факс: "
+                    elif channel_code == 'EM':
+                        prefix = "Email: "
+                    else:
+                        prefix = f"{channel_code}: "
+                    
+                    for channel_id in channel_ids:
+                        if channel_id:  # Проверяем, что значение не пустое
+                            contact_parts.append(f"{prefix}{channel_id}")
+            
+            result['Контактный реквизит заявителя'] = '; '.join(contact_parts)
+        else:
+            result['Контактный реквизит заявителя'] = ''
+        
+        # Данные изготовителя
+        manufacturer = None
+        # Сначала проверяем в основных данных сертификата
+        manufacturer_list = cert_details.get('ManufacturerDetails', [])
+        if manufacturer_list and len(manufacturer_list) > 0:
+            manufacturer = manufacturer_list[0]
+        
+        # Если не найдено, проверяем внутри TechnicalRegulationObjectDetails
+        if not manufacturer and 'TechnicalRegulationObjectDetails' in cert_details:
+            tech_obj = cert_details['TechnicalRegulationObjectDetails']
+            if 'ManufacturerDetails' in tech_obj and tech_obj['ManufacturerDetails']:
+                manufacturer = tech_obj['ManufacturerDetails'][0]
+        
+        if manufacturer:
+            result['Изготовитель'] = manufacturer.get('BusinessEntityName', '')
+            result['Страна (Изготовитель)'] = manufacturer.get('UnifiedCountryCode', '')
+            result['Краткое наименование хозяйствующего субъекта (Изготовитель)'] = manufacturer.get('BusinessEntityBriefName', '') or manufacturer.get('BusinessEntityName', '')
+            
+            # Извлечение адреса изготовителя
+            manuf_address = None
+            if 'SubjectAddressDetails' in manufacturer and manufacturer['SubjectAddressDetails']:
+                if isinstance(manufacturer['SubjectAddressDetails'], list):
+                    manuf_address = manufacturer['SubjectAddressDetails'][0]
+                else:
+                    manuf_address = manufacturer['SubjectAddressDetails']
+            elif 'AddressV4Details' in manufacturer and manufacturer['AddressV4Details']:
+                manuf_address = manufacturer['AddressV4Details'][0]
+            
+            if manuf_address:
+                address_parts = []
+                country = manuf_address.get('UnifiedCountryCode', '')
+                if country:
+                    address_parts.append(f"Страна: {country}")
+                
+                postal = manuf_address.get('PostCode', '') or manuf_address.get('PostalCode', '')
+                if postal:
+                    address_parts.append(f"Индекс: {postal}")
+                    
+                region = manuf_address.get('RegionName', '')
+                if region and region != "-":
+                    address_parts.append(f"Регион: {region}")
+                    
+                city = manuf_address.get('CityName', '')
+                if city:
+                    address_parts.append(f"Город: {city}")
+                    
+                street = manuf_address.get('StreetName', '')
+                if street:
+                    address_parts.append(f"Улица: {street}")
+                    
+                house = manuf_address.get('HouseNumber', '') or manuf_address.get('BuildingNumberId', '')
+                if house:
+                    address_parts.append(f"Дом: {house}")
+                    
+                building = manuf_address.get('BuildingNumber', '')
+                if building:
+                    address_parts.append(f"Строение: {building}")
+                    
+                room = manuf_address.get('RoomNumber', '') or manuf_address.get('RoomNumberId', '')
+                if room:
+                    address_parts.append(f"Помещение: {room}")
+                    
+                result['Адрес изготовителя'] = ', '.join(address_parts)
+            else:
+                result['Адрес изготовителя'] = ''
+            
+            # Извлечение контактных данных изготовителя
+            if 'CommunicationDetails' in manufacturer and manufacturer['CommunicationDetails']:
+                contact_parts = []
+                for comm in manufacturer['CommunicationDetails']:
+                    channel_code = comm.get('CommunicationChannelCode', '')
+                    channel_ids = comm.get('CommunicationChannelId', [])
+                    
+                    if channel_ids and channel_code and channel_code != 'null':
+                        if channel_code == 'TE':
+                            prefix = "Тел.: "
+                        elif channel_code == 'FX':
+                            prefix = "Факс: "
+                        elif channel_code == 'EM':
+                            prefix = "Email: "
+                        else:
+                            prefix = f"{channel_code}: "
+                        
+                        for channel_id in channel_ids:
+                            if channel_id:  # Проверяем, что значение не пустое
+                                contact_parts.append(f"{prefix}{channel_id}")
+                
+                result['Контактный реквизит изготовителя'] = '; '.join(contact_parts)
+            else:
+                result['Контактный реквизит изготовителя'] = ''
+        else:
+            # Если данных об изготовителе нет, заполняем пустыми строками
+            result['Изготовитель'] = ''
+            result['Страна (Изготовитель)'] = ''
+            result['Краткое наименование хозяйствующего субъекта (Изготовитель)'] = ''
+            result['Адрес изготовителя'] = ''
+            result['Контактный реквизит изготовителя'] = ''
+        
+        # Данные об объекте технического регулирования
+        tech_reg_obj = cert_details.get('TechnicalRegulationObjectDetails', {})
+        if tech_reg_obj:
+            object_name = tech_reg_obj.get('TechnicalRegulationObjectName', '')
+            kind_name = tech_reg_obj.get('TechnicalRegulationObjectKindName', '')
+            
+            if object_name:
+                result['Объект технического регулирования'] = object_name
+            elif kind_name:
+                result['Объект технического регулирования'] = kind_name
+            else:
+                result['Объект технического регулирования'] = cert_details.get('TechnicalRegulationObject', '') or cert_details.get('CertificationObjectName', '')
+        else:
+            result['Объект технического регулирования'] = cert_details.get('TechnicalRegulationObject', '') or cert_details.get('CertificationObjectName', '')
+        
+        # Данные о продукте
+        product_details = None
+        
+        # Сначала ищем в основных данных сертификата
+        if 'ProductDetails' in cert_details and cert_details['ProductDetails']:
+            product_details = cert_details['ProductDetails']
+        
+        # Затем проверяем внутри TechnicalRegulationObjectDetails
+        if not product_details and 'TechnicalRegulationObjectDetails' in cert_details:
+            tech_obj = cert_details['TechnicalRegulationObjectDetails']
+            if 'ProductDetails' in tech_obj and tech_obj['ProductDetails']:
+                product_details = tech_obj['ProductDetails']
+        
+        if product_details and len(product_details) > 0:
             product = product_details[0]
-            result['Наименование объекта оценки соответствия'] = product.get('ProductName', '')
-            result['Код товара по ТН ВЭД ЕАЭС'] = ', '.join(product.get('CommodityCodeList', []))
+            
+            # Название продукта
+            product_name = product.get('ProductName', '')
+            if not product_name and 'ProductInstanceDetails' in product:
+                instances = product.get('ProductInstanceDetails', [])
+                if instances and len(instances) > 0:
+                    product_name = instances[0].get('ProductName', '')
+                    
+            result['Наименование объекта оценки соответствия'] = product_name
+            
+            # Коды товара
+            commodity_codes = []
+            if 'CommodityCode' in product and product['CommodityCode']:
+                commodity_codes.extend([c for c in product['CommodityCode'] if c])
+            
+            if 'CommodityCodeList' in product and product['CommodityCodeList']:
+                commodity_codes.extend([c for c in product['CommodityCodeList'] if c])
+                
+            result['Код товара по ТН ВЭД ЕАЭС'] = ', '.join(commodity_codes) if commodity_codes else ''
+        else:
+            # Пробуем получить данные из других полей
+            result['Наименование объекта оценки соответствия'] = cert_details.get('CertificationObjectName', '')
+            result['Код товара по ТН ВЭД ЕАЭС'] = ''
+        
         return result
 
     def save_to_excel(self, data, filename):
@@ -382,7 +770,20 @@ class BelgissParser:
             num_cols = len(data[0].keys()) if data else 0
             logger.info(f"Сохранение {num_rows} строк с {num_cols} колонками в {filepath}")
             df = pd.DataFrame(data)
-            df.to_excel(filepath, index=False, engine='openpyxl')
+            
+            # Сохраняем в Excel с использованием openpyxl для дополнительной настройки
+            with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Данные')
+                
+                # Получаем лист и устанавливаем ширину колонок и параметры фиксации
+                worksheet = writer.sheets['Данные']
+                for idx, col in enumerate(df.columns):
+                    # Устанавливаем ширину 500 пикселей (~ 71 единица в Excel)
+                    worksheet.column_dimensions[chr(65 + idx)].width = 71
+                
+                # Фиксируем заголовки при прокрутке
+                worksheet.freeze_panes = 'A2'
+            
             if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 print(f"\nФайл сохранен: {filepath}")
                 print(f"Строк: {num_rows}, Колонок: {num_cols}, Размер: {os.path.getsize(filepath)/1024:.1f} KB")
@@ -451,7 +852,10 @@ def main():
         data = belgiss.parse_data_for_date_range(start_date, end_date)
         if data:
             filename = f"certifications_{start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')}.xlsx"
-            belgiss.save_to_excel(data, filename)
+            filepath = belgiss.save_to_excel(data, filename)
+            if filepath:
+                print("\nПарсинг и сохранение завершены успешно!")
+                input("\nНажмите Enter для завершения работы программы...")
 
 if __name__ == "__main__":
     main()
